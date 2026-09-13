@@ -1,4 +1,2 @@
-V8 — mise en page de la liste « Mes 5 jeux ».
-Remplacer uniquement app.js dans le dépôt GitHub.
-Puis faire Ctrl+F5 sur le site.
-La suppression reste disponible avant verrouillage de la préparation.
+V9 — mise en page corrigée de la liste Mes 5 jeux.
+Remplacer uniquement app.js dans GitHub puis faire Ctrl+F5.
