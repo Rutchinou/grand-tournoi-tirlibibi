@@ -100,15 +100,16 @@ function imageText(value){
 function imageSearchScore(title, gameName, description=''){
   const t=norm(imageText(title)), n=norm(gameName), d=norm(imageText(description));
   let s=0;
-  if(t===n)s+=300;
-  if(t.startsWith(n+' '))s+=220;
-  if(t.includes(n))s+=150;
+  if(t===n)s+=420;
+  else if(t===`${n} (jeu)` || t===`${n} (jeu de societe)` || t===`${n} (board game)`)s+=360;
+  else if(t.startsWith(n+' '))s+=180;
+  else if(t.includes(n))s+=80;
   const nt=n.split(' ').filter(x=>x.length>2);
   const matched=nt.filter(w=>t.includes(w)).length;
-  s+=matched*20;
-  if(/\b(jeu de société|jeu de plateau|board game|tabletop game|strategy board game|card game)\b/i.test(d))s+=120;
+  s+=matched*12;
+  if(/\b(jeu de société|jeu de plateau|jeu de cartes|board game|tabletop game|strategy board game|card game)\b/i.test(d))s+=180;
   if(/\b(box cover|box art|cover artwork|front cover|boîte|boite|box|cover|couverture)\b/i.test(t+' '+d))s+=100;
-  if(/\b(dancing|dance|person|people|woman|man|score|scoring|points|tournament|expo|event|tableau|championship|costume|cosplay|pdf|poster|affiche|festival|convention|meeting|photograph|gameplay|playthrough|setup|spilplan|spelplan|end of game)\b/i.test(t+' '+d))s-=180;
+  if(/\b(dancing|dance|person|people|woman|man|score|scoring|points|tournament|expo|event|tableau|championship|costume|cosplay|pdf|poster|affiche|festival|convention|meeting|photograph|gameplay|playthrough|setup|spilplan|spelplan|end of game)\b/i.test(t+' '+d))s-=220;
   return s;
 }
 
@@ -141,6 +142,9 @@ async function wikipediaSummary(lang,title){
 }
 
 async function searchWikipediaDirect(gameName){
+  // IMPORTANT : aucune recherche Wikipedia "large". Une recherche large
+  // mélange facilement films, jeux vidéo, spectacles, etc. Si la fiche
+  // exacte du jeu n'est pas identifiée, on préfère ne rien proposer.
   const variants=[
     gameName,
     `${gameName} (jeu)`,
@@ -156,51 +160,16 @@ async function searchWikipediaDirect(gameName){
     }
   }
   const unique=new Map();
-  found.forEach(x=>{const k=x.page_url||x.title;if(!unique.has(k)||x.score>unique.get(k).score)unique.set(k,x)});
-  return [...unique.values()].sort((a,b)=>b.score-a.score).slice(0,6);
-}
-
-async function mediaWikiPageSearch(lang, gameName){
-  const base=`https://${lang}.wikipedia.org/w/api.php`;
-  const queries=[
-    `"${gameName}" "jeu de société"`,
-    `"${gameName}" "board game"`,
-    `${gameName} jeu de société`,
-    `${gameName} board game`
-  ];
-  const pages=new Map();
-  for(const q of queries){
-    try{
-      const u=base+'?action=query&list=search&srnamespace=0&srsearch='+encodeURIComponent(q)+'&srlimit=8&format=json&origin=*';
-      const r=await fetch(u); if(!r.ok) continue;
-      const j=await r.json();
-      for(const hit of (j.query?.search||[])) if(!pages.has(hit.pageid)) pages.set(hit.pageid,hit);
-    }catch(e){}
-  }
-  const rows=[];
-  for(const hit of [...pages.values()].slice(0,12)){
-    const x=await wikipediaSummary(lang,hit.title);
-    if(x)rows.push(x);
-  }
-  return rows;
-}
-
-async function searchWikipediaGames(gameName){
-  // Priorité absolue à la fiche Wikipedia du jeu : pour beaucoup de jeux,
-  // sa vignette principale est précisément la couverture de la boîte.
-  const direct=await searchWikipediaDirect(gameName);
-  if(direct.length) return direct;
-  const all=[];
-  for(const lang of ['fr','en']) all.push(...await mediaWikiPageSearch(lang,gameName));
-  const unique=new Map();
-  all.forEach(x=>{const k=x.page_url||x.title;if(!unique.has(k)||x.score>unique.get(k).score)unique.set(k,x)});
-  return [...unique.values()].filter(x=>x.score>=180).sort((a,b)=>b.score-a.score).slice(0,6);
+  found.forEach(x=>{
+    const k=x.page_url||x.title;
+    if(!unique.has(k)||x.score>unique.get(k).score)unique.set(k,x);
+  });
+  return [...unique.values()].sort((a,b)=>b.score-a.score);
 }
 
 async function searchCommonsFallback(gameName){
-  // Secours uniquement : Commons contient souvent des photos de parties,
-  // donc on exige des indices très forts d'une boîte/couverture et on pénalise
-  // fortement les photos de plateau.
+  // Secours très strict : on ne garde qu'une image dont le nom/description
+  // identifie réellement le jeu ET qui est explicitement une boîte/couverture.
   const queries=[
     `"${gameName}" "box cover"`,
     `"${gameName}" "front cover"`,
@@ -215,35 +184,58 @@ async function searchCommonsFallback(gameName){
       const j=await r.json();
       Object.values(j.query?.pages||{}).forEach(p=>{
         const ii=p.imageinfo?.[0], title=(p.title||'').replace(/^File:/i,'');
-        if(!ii) return;
+        if(!ii)return;
         const md=ii.extmetadata||{};
         const desc=imageText(md.ImageDescription?.value||'');
         const cats=imageText(md.Categories?.value||'');
         const searchable=title+' '+desc+' '+cats;
         const n=norm(gameName), hay=norm(searchable);
         const words=n.split(' ').filter(x=>x.length>2);
-        const close=hay.includes(n) || (words.length && words.filter(w=>hay.includes(w)).length>=Math.max(1,Math.ceil(words.length*.8)));
+        const exact=hay.includes(n);
+        const close=exact || (words.length && words.filter(w=>hay.includes(w)).length===words.length);
         if(!close)return;
-        const explicitBox=/\b(box cover|front cover|cover art|box art|boite|boîte|box|couverture)\b/i.test(searchable);
-        const setup=/\b(gameplay|playthrough|setup|score|scoring|spilplan|spelplan|end of game|expansion|players?)\b/i.test(searchable);
-        if(!explicitBox || setup)return;
-        let score=imageSearchScore(title,gameName,desc+' '+cats)+120;
+        const explicitBox=/\b(box cover|front cover|cover art|box art|boite|boîte|cover|couverture)\b/i.test(searchable);
+        const board=/\b(jeu de société|jeu de plateau|jeu de cartes|board game|tabletop game|card game)\b/i.test(searchable);
+        const setup=/\b(gameplay|playthrough|setup|score|scoring|players?|components|cards|end of game|expansion)\b/i.test(searchable);
+        if(!explicitBox || !board || setup)return;
+        let score=imageSearchScore(title,gameName,desc+' '+cats)+140+(exact?100:0);
         const w=Number(ii.width||0),h=Number(ii.height||0),ratio=w&&h?w/h:0;
-        if(ratio>1.45)score-=80;
-        if(ratio>=0.65&&ratio<=1.45)score+=25;
+        if(ratio>1.45)score-=100;
+        if(ratio>=0.65&&ratio<=1.45)score+=30;
         const url=ii.thumburl||ii.url;
         if(!url)return;
         all.set(p.pageid,{id:String(p.pageid),title,url,score,source:'wikimedia_commons',page_url:ii.descriptionurl||null,description:desc.slice(0,180)});
       });
     }catch(e){}
   }
-  return [...all.values()].sort((a,b)=>b.score-a.score).slice(0,6);
+  return [...all.values()].sort((a,b)=>b.score-a.score);
 }
 
 async function searchGameImages(gameName){
-  const wiki=await searchWikipediaGames(gameName);
-  if(wiki.length) return wiki;
-  return await searchCommonsFallback(gameName);
+  const wiki=await searchWikipediaDirect(gameName);
+  // Une fiche Wikipedia exacte et clairement identifiée est la meilleure
+  // source automatique. Sinon, on tente Commons avec des critères très stricts.
+  const commons=await searchCommonsFallback(gameName);
+  return [...wiki,...commons].sort((a,b)=>b.score-a.score);
+}
+
+function reliableGameImage(results,gameName){
+  if(!results?.length)return null;
+  const n=norm(gameName);
+  const good=results.filter(r=>{
+    const title=norm(r.title||'');
+    const desc=norm(r.description||'');
+    const exact=title===n || title===`${n} (jeu)` || title===`${n} (jeu de societe)` || title===`${n} (board game)`;
+    const mention=title.includes(n) || desc.includes(n);
+    return mention && r.score>=520 && (r.source==='wikipedia' || r.source==='wikimedia_commons');
+  });
+  if(!good.length)return null;
+  good.sort((a,b)=>b.score-a.score);
+  const top=good[0], second=good[1];
+  // Si deux candidats concurrents sont proches, on ne choisit rien :
+  // l'utilisateur doit simplement pouvoir continuer sans image.
+  if(second && top.score-second.score<90)return null;
+  return top;
 }
 
 function pickGameImage(gameName){
@@ -253,23 +245,23 @@ function pickGameImage(gameName){
     const modal=document.createElement('div');
     modal.className='tir-image-modal';
     modal.innerHTML=`<div class="tir-image-box">
-      <div class="tir-image-head"><div><div class="eyebrow">IMAGE DU JEU</div><h2>Choisir la boîte de « ${esc(gameName)} »</h2><p class="muted">Je cherche d’abord la fiche du jeu et sa couverture de boîte. Les photos de plateau sont volontairement écartées.</p></div><button class="button light tir-close">Fermer</button></div>
+      <div class="tir-image-head"><div><div class="eyebrow">IMAGE DU JEU</div><h2>Recherche de la boîte de « ${esc(gameName)} »</h2><p class="muted">Je sélectionne automatiquement une boîte uniquement si le résultat est suffisamment fiable. Sinon, aucune image n’est ajoutée.</p></div></div>
       <div class="tir-image-content"><p class="muted">Recherche de la boîte du jeu…</p></div>
       <div class="tir-image-actions"><button class="button light tir-none">Continuer sans image</button></div>
     </div>`;
     document.body.appendChild(modal);
     let done=false;
     const finish=v=>{if(done)return;done=true;modal.remove();resolve(v)};
-    modal.querySelector('.tir-close').onclick=()=>finish(null);
     modal.querySelector('.tir-none').onclick=()=>finish(null);
     const results=await searchGameImages(gameName);
-    const content=modal.querySelector('.tir-image-content');
-    if(!results.length){
-      content.innerHTML=`<div class="notice">Aucune boîte suffisamment fiable n'a été trouvée pour « ${esc(gameName)} ». Tu peux continuer sans image.</div>`;
+    const chosen=reliableGameImage(results,gameName);
+    if(!chosen){
+      modal.querySelector('.tir-image-content').innerHTML=`<div class="notice">Je n’ai pas trouvé de boîte suffisamment fiable pour « ${esc(gameName)} ». Aucune image ne sera ajoutée.</div>`;
       return;
     }
-    content.innerHTML=`<div class="tir-image-grid">${results.map((r,i)=>`<button type="button" class="tir-image-choice" data-i="${i}"><img src="${esc(r.url)}" alt="Boîte ${esc(gameName)}" loading="lazy"><div class="tir-image-title">${esc(r.title)}</div><div class="muted" style="font-size:11px;margin-top:3px">${r.source==='wikipedia'?'Fiche Wikipédia':'Wikimedia Commons'}</div></button>`).join('')}</div>`;
-    modal.querySelectorAll('.tir-image-choice').forEach(b=>b.onclick=()=>finish(results[Number(b.dataset.i)]));
+    modal.querySelector('.tir-image-content').innerHTML=`<div style="display:flex;justify-content:center"><img src="${esc(chosen.url)}" alt="Boîte ${esc(gameName)}" style="max-width:260px;max-height:340px;object-fit:contain;border-radius:10px;background:#f3f0ea"></div><p class="muted" style="text-align:center;margin:12px 0 0">Boîte identifiée automatiquement.</p>`;
+    // Pas de choix manuel : une image jugée fiable est utilisée automatiquement.
+    setTimeout(()=>finish(chosen),450);
   });
 }
 
