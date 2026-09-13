@@ -1,7 +1,9 @@
-// Configuration publique Supabase.
-// Le "Publishable/anon key" peut être visible dans le code d'un site statique.
-// NE METTEZ JAMAIS ici la clé secrète/service_role ni le mot de passe PostgreSQL.
+// Configuration publique Firebase
 window.TIRLIBIBI_CONFIG = {
-  SUPABASE_URL: "https://bewxqgnolbabghdotrjp.supabase.co",
-  SUPABASE_ANON_KEY: "sb_publishable_d1-T4oYbWSNQKh4imI0_8A_IunnhvBf"
+  apiKey: "COLLER_ICI_API_KEY",
+  authDomain: "grand-tournoi-tirlibibi.firebaseapp.com",
+  projectId: "grand-tournoi-tirlibibi",
+  storageBucket: "grand-tournoi-tirlibibi.firebasestorage.app",
+  messagingSenderId: "427155235941",
+  appId: "1:427155235941:web:e68193cc5a7f499ef3928c"
 };

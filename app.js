@@ -1,188 +1,52 @@
-const cfg = window.TIRLIBIBI_CONFIG || {};
-const { createClient } = window.supabase;
-const sb = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+import {initializeApp} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,updateProfile,signOut} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
+import {getFirestore,collection,doc,getDoc,getDocs,setDoc,addDoc,query,orderBy,where,writeBatch,deleteDoc} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
 
-const AVATARS = ['🎲','🧙','🏴‍☠️','🦊','🤖','👑','🐼','🦄','🐉','🧝','🧛','👽','🐸'];
-const POINTS = {1:5,2:4,3:3,4:2,5:1};
-let state = { user:null, me:null, players:[], games:[], finals:[], votes:[], veto:null, vetos:[], results:[], settings:null };
+const cfg=window.TIRLIBIBI_CONFIG||{}, app=initializeApp(cfg), auth=getAuth(app), db=getFirestore(app);
+const AVATARS=['🎲','🧙','🏴‍☠️','🦊','🤖','👑','🐼','🦄','🐉','🧝','🧛','👽','🐸'];
+const POINTS={1:5,2:4,3:3,4:2,5:1};
+let state={user:null,me:null,isAdmin:false,players:[],games:[],finals:[],votes:[],veto:null,vetos:[],results:[],settings:{preparation_locked:false}};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+const norm=s=>s.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
+const flash=(m,t='error')=>`<div class="flash ${t}">${esc(m)}</div>`;
+const now=()=>new Date().toISOString();
+const route=()=>location.hash.replace(/^#/,'')||'/';
 
-const $ = s => document.querySelector(s);
-const esc = s => String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-const norm = s => s.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
-function flash(msg,type='error'){ return `<div class="flash ${type}">${esc(msg)}</div>`; }
-function auth(){ return !!state.user; }
-function route(){ return location.hash.replace(/^#/,'') || '/'; }
-
-async function load(){
-  if(!cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes('COLLER_ICI')) {
-    $('#app').innerHTML = `<div class="card narrow"><h2>⚙️ Configuration à terminer</h2><p>Ouvrez <b>config.js</b> et collez l'URL de votre projet Supabase et sa clé Publishable/anon.</p></div>`;
-    return;
-  }
-  const {data:{session}} = await sb.auth.getSession();
-  state.user = session?.user || null;
-  if(state.user) await loadData();
-  renderNav(); render();
-}
+async function admin(uid){const s=await getDoc(doc(db,'admins',uid));return s.exists()&&s.data().enabled!==false}
 async function loadData(){
-  const uid = state.user.id;
-  let profile = await sb.from('players').select('*').eq('id',uid).maybeSingle();
-  if(!profile.data && !profile.error){
-    const md = state.user.user_metadata || {};
-    const name = md.name || (state.user.email || '').split('@')[0];
-    const avatar = md.avatar || '🎲';
-    const ins = await sb.from('players').insert({id:uid,email:state.user.email,name,avatar});
-    if(!ins.error) profile = await sb.from('players').select('*').eq('id',uid).maybeSingle();
-  }
-  const [players,games,finals,votes,veto,vetos,results,settings] = await Promise.all([
-    sb.from('players').select('*').eq('is_admin',false).order('created_at'),
-    sb.from('games').select('*').order('created_at'),
-    sb.from('final_games').select('*,games(*)').order('position'),
-    state.me?.is_admin ? sb.from('game_votes').select('*') : sb.from('game_votes').select('*').eq('voter_id',uid),
-    sb.from('vetos').select('*').eq('player_id',uid).maybeSingle(),
-    sb.from('vetos').select('*'),
-    sb.from('results').select('*'),
-    sb.from('tournament_settings').select('*').eq('id',1).single()
-  ]);
-  state.me=profile.data; state.players=players.data||[]; state.games=games.data||[];
-  state.finals=finals.data||[]; state.votes=votes.data||[]; state.veto=veto.data;
-  state.vetos=vetos.data||[]; state.results=results.data||[]; state.settings=settings.data;
-}
-function renderNav(){
-  const n=$('#nav');
-  if(!state.user){n.innerHTML=`<a href="#/login">Connexion</a><a href="#/register" class="button">Participer</a>`;return;}
-  n.innerHTML=`<a href="#/">Accueil</a><a href="#/preparation">Préparation</a><a href="#/tournoi">Tournoi</a><a href="#/stats">Stats</a>${state.me?.is_admin?'<a href="#/admin">⚙️ Admin</a>':''}<a href="#" id="logout">Déconnexion</a>`;
-  $('#logout')?.addEventListener('click',async e=>{e.preventDefault();await sb.auth.signOut();location.hash='/';await load();});
-}
-async function render(){
-  const r=route();
-  if(r==='/login') return renderLogin();
-  if(r==='/register') return renderRegister();
-  if(!state.user) return renderHome();
-  if(!state.me) return renderProfile();
-  if(r==='/preparation') return renderPreparation();
-  if(r==='/tournoi') return renderTournament();
-  if(r.startsWith('/result/')) return renderResult(r.split('/')[2]);
-  if(r==='/stats') return renderStats();
-  if(r==='/admin' && state.me.is_admin) return renderAdmin();
-  renderHome();
-}
-function renderHome(){
-  $('#app').innerHTML=`<section class="hero"><div><div class="eyebrow">SAISON 1 · 5 JOUEURS · 15 JEUX</div><h1>Le Grand <strong>Tournoi</strong> des Tirlibibi</h1><p>Choisissez vos jeux, votez, utilisez votre veto… puis affrontez-vous sur les 15 jeux retenus.</p><div class="actions">${state.user?'<a class="button" href="#/preparation">Entrer dans le tournoi</a>':'<a class="button" href="#/register">Créer mon joueur</a><a class="button light" href="#/login">Me connecter</a>'}</div></div><div class="dice">🎲</div></section>
-  <div class="card"><h2>Les joueurs</h2><div class="players">${state.players.map(p=>`<div class="player"><span class="avatar">${p.avatar}</span><b>${esc(p.name)}</b></div>`).join('')||'<span class="muted">Les joueurs apparaîtront ici.</span>'}</div></div>
-  ${state.finals.length?`<div class="card"><h2>Les 15 jeux du tournoi</h2><div class="game-grid">${state.finals.map(f=>gameCard(f.games,f.position)).join('')}</div></div>`:''}`;
-}
-function gameCard(g,pos=''){
-  if(!g)return '';
-  return `<article class="game"><div class="cover">${g.image_url?`<img src="${esc(g.image_url)}" alt="">`:'🎲'}</div><b>${pos?pos+'. ':''}${esc(g.name)}</b><small class="muted">${esc(state.players.find(p=>p.id===g.proposed_by)?.name||'')}</small></article>`;
-}
-function renderLogin(){
-  $('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">CONNEXION</div><h1>Bienvenue</h1><form id="loginForm"><label>Email<input type="email" id="email" required></label><label>Mot de passe<input type="password" id="password" required></label><button class="button">Se connecter</button></form><p class="muted">Pas encore inscrit ? <a href="#/register">Créer mon compte</a></p></div>`;
-  $('#loginForm').onsubmit=async e=>{e.preventDefault();const {error}=await sb.auth.signInWithPassword({email:$('#email').value.trim(),password:$('#password').value});if(error)return $('#app').insertAdjacentHTML('afterbegin',flash(error.message));location.hash='/';await load();};
-}
-function renderRegister(){
-  $('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">INSCRIPTION</div><h1>Je rejoins le tournoi</h1><form id="regForm"><label>Prénom / pseudo<input id="name" maxlength="40" required></label><label>Email<input type="email" id="email" required></label><label>Mot de passe<input type="password" id="password" minlength="6" required></label><label>Mon avatar</label><div class="avatars">${AVATARS.map((a,i)=>`<label class="avatar-choice"><input type="radio" name="avatar" value="${a}" ${i===0?'checked':''}><span>${a}</span></label>`).join('')}</div><button class="button">Créer mon compte</button></form><p class="muted">Le tournoi est limité à 5 joueurs.</p></div>`;
-  $('#regForm').onsubmit=async e=>{
-    e.preventDefault();
-    const name=$('#name').value.trim(), email=$('#email').value.trim().toLowerCase(), password=$('#password').value, avatar=document.querySelector('input[name=avatar]:checked').value;
-    const {data,error}=await sb.auth.signUp({email,password,options:{data:{name,avatar}}});
-    if(error)return $('#app').insertAdjacentHTML('afterbegin',flash(error.message));
-    if(!data.user)return $('#app').insertAdjacentHTML('afterbegin',flash('Inscription créée. Vérifiez votre email puis connectez-vous.'));
-    if(data.session){ await load(); location.hash='/'; }
-    else { $('#app').innerHTML=flash('Compte créé ! Vérifiez votre email si Supabase demande une confirmation, puis revenez ici pour vous connecter.','success') + `<div class="card narrow"><a class="button" href="#/login">Se connecter</a></div>`; }
-  };
-}
-function renderProfile(){
-  $('#app').innerHTML=`<div class="card narrow"><h2>Profil à finaliser</h2><p>Votre compte Auth existe mais votre profil joueur n'a pas pu être créé.</p><p>Déconnectez-vous puis réessayez l'inscription.</p></div>`;
-}
-function renderPreparation(){
-  const mine=state.games.filter(g=>g.proposed_by===state.me.id);
-  const others=state.players.filter(p=>p.id!==state.me.id).map(p=>({...p,games:state.games.filter(g=>g.proposed_by===p.id)}));
-  const locked=state.settings?.preparation_locked;
-  const voteMap=Object.fromEntries(state.votes.map(v=>[v.game_id,v.priority]));
-  const vetoCounts={};state.vetos.forEach(v=>{const g=state.games.find(x=>x.id===v.game_id);if(g)vetoCounts[g.proposed_by]=(vetoCounts[g.proposed_by]||0)+1;});
-  $('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 1</div><h1>Préparation</h1></div><span class="badge">${mine.length}/5 jeux proposés</span></div>
-  ${locked?flash('La préparation est verrouillée. Les choix sont maintenant figés.','success'):''}
-  <div class="card"><h2>1. Mes 5 jeux</h2><p class="muted">Chaque jeu doit être différent de tous les autres.</p>${!locked&&mine.length<5?`<form id="gameForm" class="inline-form"><input id="gameName" placeholder="Nom du jeu de société" required><button class="button">Ajouter le jeu</button></form>`:''}<ol>${mine.map(g=>`<li><b>${esc(g.name)}</b></li>`).join('')}</ol></div>
-  <div class="card"><h2>2. Je classe les jeux des autres joueurs</h2><p>Pour chaque liste, attribuez obligatoirement <b>1, 2, 3, 4 et 5</b>, une seule fois.</p>
-  ${others.map(p=>`<section><h3>${p.avatar} ${esc(p.name)}</h3>${p.games.length<5?`<p class="ko">Cette liste n'est pas encore complète.</p>`:p.games.map(g=>`<div class="vote-row"><span>${esc(g.name)}</span><select class="rankSel" data-game="${g.id}"><option value="">Priorité…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${voteMap[g.id]===n?'selected':''}>${n}</option>`).join('')}</select></div>`).join('')}${p.games.length===5&&!locked?`<button class="button light saveVotes" data-player="${p.id}">Enregistrer ce classement</button>`:''}</section>`).join('')}</div>
-  <div class="card"><h2>3. Mon veto</h2><p>Un seul veto pour tout le tournoi. Une liste ne peut recevoir que 2 vetos maximum.</p>${state.veto?`<div class="notice">Veto utilisé sur : <b>${esc(state.games.find(g=>g.id===state.veto.game_id)?.name||'')}</b></div>`:locked?'<p class="muted">Veto indisponible : préparation verrouillée.</p>':`<div class="veto-list">${state.games.filter(g=>g.proposed_by!==state.me.id && (vetoCounts[g.proposed_by]||0)<2).map(g=>`<button class="veto" data-veto="${g.id}">🚫 ${esc(g.name)}</button>`).join('')}</div>`}</div>`;
-  $('#gameForm')?.addEventListener('submit',addGame);
-  document.querySelectorAll('.saveVotes').forEach(b=>b.onclick=()=>saveVotes(b.dataset.player));
-  document.querySelectorAll('[data-veto]').forEach(b=>b.onclick=()=>castVeto(b.dataset.veto));
-}
-async function addGame(e){
-  e.preventDefault();const name=$('#gameName').value.trim();const normalized=norm(name);
-  if(state.games.some(g=>g.normalized_name===normalized))return $('#app').insertAdjacentHTML('afterbegin',flash(`Jeu déjà proposé par ${state.players.find(p=>p.id===state.games.find(g=>g.normalized_name===normalized).proposed_by)?.name||'un autre joueur'}.`));
-  const {error}=await sb.from('games').insert({name,normalized_name:normalized,proposed_by:state.me.id});
-  if(error)return $('#app').insertAdjacentHTML('afterbegin',flash(error.message));
-  await loadData();renderPreparation();
-}
-async function saveVotes(playerId){
-  const games=state.games.filter(g=>g.proposed_by===playerId);const vals=games.map(g=>Number(document.querySelector(`[data-game="${g.id}"]`).value));
-  if(vals.some(v=>!v)||[...new Set(vals)].length!==5)return alert('Il faut utiliser exactement 1, 2, 3, 4 et 5.');
-  for(let i=0;i<games.length;i++){const {error}=await sb.from('game_votes').upsert({voter_id:state.me.id,game_id:games[i].id,priority:vals[i]});if(error)return alert(error.message);}
-  await loadData();renderPreparation();
-}
-async function castVeto(gameId){
-  if(!confirm('Confirmer ce veto ? Il sera définitif.'))return;
-  const {error}=await sb.from('vetos').insert({player_id:state.me.id,game_id:gameId});
-  if(error)return alert(error.message);
-  await loadData();renderPreparation();
-}
-function autoSelected(){
-  const out=[];
-  for(const p of state.players){
-    const gs=state.games.filter(g=>g.proposed_by===p.id && !state.vetos.some(v=>v.game_id===g.id));
-    const scored=gs.map(g=>({g,score:state.votes.filter(v=>v.game_id===g.id).reduce((s,v)=>s+(6-v.priority),0)})).sort((a,b)=>b.score-a.score||a.g.created_at.localeCompare(b.g.created_at));
-    out.push(...scored.slice(0,3).map(x=>x.g));
-  }
-  return out;
-}
-function renderAdmin(){
-  const selected=state.finals.map(f=>f.game_id);const auto=autoSelected();
-  $('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">ADMINISTRATION</div><h1>Tableau de contrôle</h1></div><span class="badge">${state.players.length}/5 joueurs</span></div>
-  <div class="card"><h2>État</h2><p>Préparation : <b>${state.settings?.preparation_locked?'verrouillée':'ouverte'}</b></p><p>Jeux proposés : <b>${state.games.length}/25</b></p><p>Jeux retenus : <b>${state.finals.length}/15</b></p><div class="actions">${!state.settings?.preparation_locked?`<button class="button" id="autoSelect">Calculer automatiquement les 15 jeux</button>`:''}<button class="button secondary" id="lockPrep">${state.settings?.preparation_locked?'Réouvrir la préparation':'Verrouiller la préparation'}</button></div></div>
-  <div class="card"><h2>Sélection manuelle des 15 jeux</h2><p>Exactement 3 jeux par joueur. La sélection ci-dessous remplacera la sélection actuelle.</p><div class="admin-grid">${state.players.flatMap(p=>state.games.filter(g=>g.proposed_by===p.id).map(g=>`<label class="checkgame"><input type="checkbox" class="finalCheck" data-proposer="${p.id}" value="${g.id}" ${selected.includes(g.id)?'checked':''}>${esc(g.name)}</label>`)).join('')}</div><button class="button" id="saveManual">Enregistrer les 15 jeux</button></div>
-  <div class="card"><h2>Résultats saisis</h2><p>${state.results.length} résultats individuels enregistrés.</p></div>`;
-  $('#autoSelect')?.addEventListener('click',async()=>{if(auto.length!==15)return alert('Impossible de produire 15 jeux : vérifiez les 5 listes, les votes et les vetos.');await saveFinals(auto,true);});
-  $('#saveManual')?.addEventListener('click',async()=>{const ids=[...document.querySelectorAll('.finalCheck:checked')].map(x=>x.value);if(ids.length!==15)return alert('Il faut sélectionner exactement 15 jeux.');for(const p of state.players){const n=ids.filter(id=>state.games.find(g=>g.id===id)?.proposed_by===p.id).length;if(n!==3)return alert(`${p.name} doit avoir exactement 3 jeux sélectionnés.`);}await saveFinals(ids.map(id=>state.games.find(g=>g.id===id)),false);});
-  $('#lockPrep')?.addEventListener('click',toggleLock);
-}
-async function saveFinals(games,automatic){
-  await sb.from('final_games').delete().neq('position',0);
-  for(let i=0;i<games.length;i++){const {error}=await sb.from('final_games').insert({game_id:games[i].id,position:i+1,selected_automatically:automatic,admin_modified:!automatic});if(error)return alert(error.message);}
-  await sb.from('admin_logs').insert({admin_id:state.me.id,action:automatic?'auto_selection':'manual_selection',details:{game_ids:games.map(g=>g.id)}});
-  await loadData();renderAdmin();
-}
-async function toggleLock(){
-  const v=!state.settings.preparation_locked;
-  if(v && !confirm('Verrouiller la préparation ? Les joueurs ne pourront plus modifier leurs jeux, votes ou vetos.'))return;
-  const {error}=await sb.from('tournament_settings').update({preparation_locked:v}).eq('id',1);
-  if(error)return alert(error.message);await loadData();renderAdmin();
-}
-function renderTournament(){
-  if(!state.finals.length)return $('#app').innerHTML=`<div class="card"><h1>Tournoi</h1><p>Les 15 jeux n'ont pas encore été sélectionnés.</p></div>`;
-  const resultsByGame={};state.results.forEach(r=>(resultsByGame[r.game_id]??=[]).push(r));
-  const standings=state.players.map(p=>({p,points:state.results.filter(r=>r.player_id===p.id).reduce((s,r)=>s+r.points,0)})).sort((a,b)=>b.points-a.points);
-  $('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 2</div><h1>Le tournoi</h1></div><span class="badge">${standings.map((x,i)=>`${i+1}. ${x.p.avatar} ${esc(x.p.name)} · ${x.points} pts`).join(' · ')}</span></div>
-  <div class="card table-scroll"><table class="tournament"><thead><tr><th>Jeu</th>${state.players.map(p=>`<th>${p.avatar}<br>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${state.finals.map(f=>{const rs=resultsByGame[f.game_id]||[];return `<tr><td><a href="#/result/${f.game_id}"><b>${f.position}. ${esc(f.games.name)}</b></a></td>${state.players.map(p=>{const r=rs.find(x=>x.player_id===p.id);return `<td>${r?`<span class="rank r${r.rank}">${r.rank}</span><br><small>${r.points} pt</small>`:'—'}</td>`}).join('')}</tr>`}).join('')}</tbody></table></div>`;
-}
-async function renderResult(gameId){
-  const f=state.finals.find(x=>x.game_id===gameId);if(!f)return renderTournament();
-  const existing=state.results.filter(r=>r.game_id===gameId);
-  const mine=existing.find(r=>r.player_id===state.me.id);
-  $('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">RÉSULTAT</div><h1>${f.position}. ${esc(f.games.name)}</h1><p>Indiquez votre classement sur ce jeu.</p><div class="notice">1er = 5 pts · 2e = 4 pts · 3e = 3 pts · 4e = 2 pts · 5e = 1 pt</div><form id="resultForm"><label>Mon classement<select id="rank" required><option value="">Choisir…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${mine?.rank===n?'selected':''}>${n}e place · ${POINTS[n]} point(s)</option>`).join('')}</select></label><button class="button">Enregistrer</button></form><p class="muted">Résultats actuellement saisis : ${existing.length}/5.</p><a href="#/tournoi">← Retour au tournoi</a></div>`;
-  $('#resultForm').onsubmit=async e=>{e.preventDefault();const rank=Number($('#rank').value);const {error}=mine?await sb.from('results').update({rank,points:POINTS[rank],updated_at:new Date().toISOString()}).eq('game_id',gameId).eq('player_id',state.me.id):await sb.from('results').insert({game_id:gameId,player_id:state.me.id,rank,points:POINTS[rank],entered_by:state.me.id,is_admin_edit:false});if(error)return alert(error.message);await loadData();location.hash='/tournoi';render();};
-}
-function renderStats(){
-  const stats=state.players.map(p=>{const rs=state.results.filter(r=>r.player_id===p.id);return {p,rs,points:rs.reduce((s,r)=>s+r.points,0),wins:rs.filter(r=>r.rank===1).length,podiums:rs.filter(r=>r.rank<=3).length};});
-  $('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 3</div><h1>Statistiques</h1></div></div><div class="card"><label>Choisir un joueur<select id="statPlayer">${stats.map(s=>`<option value="${s.p.id}">${s.p.avatar} ${esc(s.p.name)}</option>`).join('')}</select></label><div id="statDetail"></div></div>`;
-  function detail(id){const s=stats.find(x=>x.p.id===id)||stats[0];if(!s)return;$('#statDetail').innerHTML=`<div class="player-card"><span class="big">${s.p.avatar}</span><div><h2>${esc(s.p.name)}</h2><span class="muted">${s.rs.length} jeu(x) joué(s)</span></div></div><div class="stats-grid"><div><small>Points</small><b>${s.points}</b></div><div><small>Victoires</small><b>${s.wins}</b></div><div><small>Podiums</small><b>${s.podiums}</b></div><div><small>Dernière place</small><b>${s.rs.filter(r=>r.rank===5).length}</b></div></div><h3>Répartition des places</h3><p>🥇 ${s.rs.filter(r=>r.rank===1).length} · 🥈 ${s.rs.filter(r=>r.rank===2).length} · 🥉 ${s.rs.filter(r=>r.rank===3).length} · 4e ${s.rs.filter(r=>r.rank===4).length} · 5e ${s.rs.filter(r=>r.rank===5).length}</p>`;}
-  $('#statPlayer').onchange=e=>detail(e.target.value);detail(stats[0]?.p.id);
-}
-window.addEventListener('hashchange',async()=>{if(state.user)await loadData();renderNav();render();});
-sb.auth.onAuthStateChange(async(_event,session)=>{state.user=session?.user||null;if(state.user)await loadData();else state.me=null;renderNav();render();});
+  const uid=state.user.uid, ps=await getDoc(doc(db,'players',uid));
+  if(!ps.exists()) await setDoc(doc(db,'players',uid),{id:uid,email:state.user.email||'',name:state.user.displayName||((state.user.email||'').split('@')[0]),avatar:'🎲',is_admin:false,created_at:now()});
+  state.me=(await getDoc(doc(db,'players',uid))).data();
+  state.isAdmin=await admin(uid); state.me.is_admin=state.isAdmin;
 
-if(location.hash.startsWith('#/result/')){
-  (async()=>{await load();const id=location.hash.split('/')[2];if(state.user)await renderResult(id);})();
-}else{load();}
+  state.players=(await getDocs(query(collection(db,'players'),orderBy('created_at')))).docs.map(d=>({id:d.id,...d.data()})).filter(p=>p.email&&!p.is_admin);
+  state.games=(await getDocs(query(collection(db,'games'),orderBy('created_at')))).docs.map(d=>({id:d.id,...d.data()}));
+  state.finals=(await getDocs(query(collection(db,'final_games'),orderBy('position')))).docs.map(d=>({id:d.id,...d.data()})).map(f=>({...f,games:state.games.find(g=>g.id===f.game_id)})).filter(f=>f.games);
+  const v=state.isAdmin?await getDocs(collection(db,'game_votes')):await getDocs(query(collection(db,'game_votes'),where('voter_id','==',uid)));
+  state.votes=v.docs.map(d=>({id:d.id,...d.data()}));
+  const myv=await getDocs(query(collection(db,'vetos'),where('player_id','==',uid))); state.veto=myv.docs[0]?{id:myv.docs[0].id,...myv.docs[0].data()}:null;
+  state.vetos=(await getDocs(collection(db,'vetos'))).docs.map(d=>({id:d.id,...d.data()}));
+  state.results=(await getDocs(collection(db,'results'))).docs.map(d=>({id:d.id,...d.data()}));
+  const ss=await getDoc(doc(db,'tournament_settings','main')); if(ss.exists())state.settings=ss.data();
+}
+async function load(){if(!cfg.apiKey||cfg.apiKey.includes('COLLER_ICI')){$('#app').innerHTML=`<div class="card narrow"><h2>⚙️ Configuration à terminer</h2><p>Dans <b>config.js</b>, collez la clé API de l'application Web Firebase.</p></div>`;return} if(state.user)await loadData();renderNav();render()}
+function renderNav(){const n=$('#nav');if(!state.user){n.innerHTML=`<a href="#/login">Connexion</a><a href="#/register" class="button">Participer</a>`;return}n.innerHTML=`<a href="#/">Accueil</a><a href="#/preparation">Préparation</a><a href="#/tournoi">Tournoi</a><a href="#/stats">Stats</a>${state.isAdmin?'<a href="#/admin">⚙️ Admin</a>':''}<a href="#" id="logout">Déconnexion</a>`;$('#logout')?.addEventListener('click',async e=>{e.preventDefault();await signOut(auth);location.hash='/'})}
+async function render(){const r=route();if(r==='/login')return login();if(r==='/register')return register();if(!state.user)return home();if(!state.me)return profile();if(r==='/preparation')return prep();if(r==='/tournoi')return tournament();if(r.startsWith('/result/'))return result(r.split('/')[2]);if(r==='/stats')return stats();if(r==='/admin'&&state.isAdmin)return adminPage();home()}
+function home(){$('#app').innerHTML=`<section class="hero"><div><div class="eyebrow">SAISON 1 · 5 JOUEURS · 15 JEUX</div><h1>Le Grand <strong>Tournoi</strong> des Tirlibibi</h1><p>Choisissez vos jeux, votez, utilisez votre veto… puis affrontez-vous sur les 15 jeux retenus.</p><div class="actions">${state.user?'<a class="button" href="#/preparation">Entrer dans le tournoi</a>':'<a class="button" href="#/register">Créer mon joueur</a><a class="button light" href="#/login">Me connecter</a>'}</div></div><div class="dice">🎲</div></section><div class="card"><h2>Les joueurs</h2><div class="players">${state.players.map(p=>`<div class="player"><span class="avatar">${p.avatar}</span><b>${esc(p.name)}</b></div>`).join('')||'<span class="muted">Les joueurs apparaîtront ici.</span>'}</div></div>${state.finals.length?`<div class="card"><h2>Les 15 jeux du tournoi</h2><div class="game-grid">${state.finals.map(f=>`<article class="game"><div class="cover">${f.games.image_url?`<img src="${esc(f.games.image_url)}" alt="">`:'🎲'}</div><b>${f.position}. ${esc(f.games.name)}</b><small class="muted">${esc(state.players.find(p=>p.id===f.games.proposed_by)?.name||'')}</small></article>`).join('')}</div></div>`:''}`}
+function login(){$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">CONNEXION</div><h1>Bienvenue</h1><form id="f"><label>Email<input id="email" type="email" required></label><label>Mot de passe<input id="password" type="password" required></label><button class="button">Se connecter</button></form><p class="muted">Pas encore inscrit ? <a href="#/register">Créer mon compte</a></p></div>`;$('#f').onsubmit=async e=>{e.preventDefault();try{await signInWithEmailAndPassword(auth,$('#email').value.trim(),$('#password').value);location.hash='/'}catch(x){$('#app').insertAdjacentHTML('afterbegin',flash(x.message))}}}
+function register(){$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">INSCRIPTION</div><h1>Je rejoins le tournoi</h1><form id="f"><label>Prénom / pseudo<input id="name" maxlength="40" required></label><label>Email<input id="email" type="email" required></label><label>Mot de passe<input id="password" type="password" minlength="6" required></label><label>Mon avatar</label><div class="avatars">${AVATARS.map((a,i)=>`<label class="avatar-choice"><input type="radio" name="avatar" value="${a}" ${i?'':'checked'}><span>${a}</span></label>`).join('')}</div><button class="button">Créer mon compte</button></form><p class="muted">Le tournoi est limité à 5 joueurs.</p></div>`;$('#f').onsubmit=async e=>{e.preventDefault();try{if((await getDocs(collection(db,'players'))).docs.filter(d=>!d.data().is_admin).length>=5)throw Error('Les 5 places du tournoi sont déjà prises.');const name=$('#name').value.trim(),email=$('#email').value.trim().toLowerCase(),password=$('#password').value,avatar=document.querySelector('[name=avatar]:checked').value,c=await createUserWithEmailAndPassword(auth,email,password);await updateProfile(c.user,{displayName:name});await setDoc(doc(db,'players',c.user.uid),{id:c.user.uid,email,name,avatar,is_admin:false,created_at:now()});location.hash='/'}catch(x){$('#app').insertAdjacentHTML('afterbegin',flash(x.message))}}}
+function profile(){$('#app').innerHTML=`<div class="card narrow"><h2>Profil à finaliser</h2><p>Votre compte existe mais votre profil joueur n'a pas pu être chargé.</p></div>`}
+function prep(){const mine=state.games.filter(g=>g.proposed_by===state.me.id),others=state.players.filter(p=>p.id!==state.me.id).map(p=>({...p,games:state.games.filter(g=>g.proposed_by===p.id)})),locked=state.settings.preparation_locked,vmap=Object.fromEntries(state.votes.map(v=>[v.game_id,v.priority])),counts={};state.vetos.forEach(v=>{const g=state.games.find(x=>x.id===v.game_id);if(g)counts[g.proposed_by]=(counts[g.proposed_by]||0)+1});$('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 1</div><h1>Préparation</h1></div><span class="badge">${mine.length}/5 jeux proposés</span></div>${locked?flash('La préparation est verrouillée.','success'):''}<div class="card"><h2>1. Mes 5 jeux</h2><p class="muted">Chaque jeu doit être différent de tous les autres.</p>${!locked&&mine.length<5?`<form id="gf" class="inline-form"><input id="gn" placeholder="Nom du jeu de société" required><button class="button">Ajouter le jeu</button></form>`:''}<ol>${mine.map(g=>`<li><b>${esc(g.name)}</b></li>`).join('')}</ol></div><div class="card"><h2>2. Je classe les jeux des autres joueurs</h2><p>Pour chaque liste, utilisez obligatoirement 1, 2, 3, 4 et 5.</p>${others.map(p=>`<section><h3>${p.avatar} ${esc(p.name)}</h3>${p.games.length<5?`<p class="ko">Cette liste n'est pas encore complète.</p>`:p.games.map(g=>`<div class="vote-row"><span>${esc(g.name)}</span><select data-game="${g.id}"><option value="">Priorité…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${vmap[g.id]===n?'selected':''}>${n}</option>`).join('')}</select></div>`).join('')}${p.games.length===5&&!locked?`<button class="button light sv" data-player="${p.id}">Enregistrer ce classement</button>`:''}</section>`).join('')}</div><div class="card"><h2>3. Mon veto</h2><p>Un seul veto pour tout le tournoi. Une liste ne peut recevoir que 2 vetos.</p>${state.veto?`<div class="notice">Veto utilisé sur : <b>${esc(state.games.find(g=>g.id===state.veto.game_id)?.name||'')}</b></div>`:locked?'<p class="muted">Veto indisponible : préparation verrouillée.</p>':`<div class="veto-list">${state.games.filter(g=>g.proposed_by!==state.me.id&&(counts[g.proposed_by]||0)<2).map(g=>`<button class="veto" data-veto="${g.id}">🚫 ${esc(g.name)}</button>`).join('')}</div>`}</div>`;$('#gf')?.addEventListener('submit',addGame);document.querySelectorAll('.sv').forEach(b=>b.onclick=()=>votes(b.dataset.player));document.querySelectorAll('[data-veto]').forEach(b=>b.onclick=()=>veto(b.dataset.veto))}
+async function addGame(e){e.preventDefault();if(state.settings.preparation_locked)return;const name=$('#gn').value.trim(),normalized=norm(name),mine=state.games.filter(g=>g.proposed_by===state.me.id);if(mine.length>=5)return alert('Vous avez déjà proposé 5 jeux.');const old=state.games.find(g=>g.normalized_name===normalized);if(old)return $('#app').insertAdjacentHTML('afterbegin',flash(`Jeu déjà proposé par ${state.players.find(p=>p.id===old.proposed_by)?.name||'un autre joueur'}.`));await addDoc(collection(db,'games'),{name,normalized_name:normalized,proposed_by:state.me.id,created_at:now()});await loadData();prep()}
+async function votes(pid){const gs=state.games.filter(g=>g.proposed_by===pid),vals=gs.map(g=>Number(document.querySelector(`[data-game="${g.id}"]`).value));if(vals.length!==5||vals.some(v=>!v)||new Set(vals).size!==5)return alert('Il faut utiliser exactement 1, 2, 3, 4 et 5.');const b=writeBatch(db);gs.forEach((g,i)=>b.set(doc(db,'game_votes',`${state.me.id}_${g.id}`),{voter_id:state.me.id,game_id:g.id,priority:vals[i],created_at:now()}));await b.commit();await loadData();prep()}
+async function veto(gid){if(state.veto)return alert('Vous avez déjà utilisé votre veto.');if(!confirm('Confirmer ce veto ? Il sera définitif.'))return;const g=state.games.find(x=>x.id===gid);if(!g||g.proposed_by===state.me.id)return;const n=state.vetos.filter(v=>state.games.find(x=>x.id===v.game_id)?.proposed_by===g.proposed_by).length;if(n>=2)return alert('Cette liste a déjà reçu 2 vetos.');await setDoc(doc(db,'vetos',state.me.id),{player_id:state.me.id,game_id:gid,created_at:now()});await loadData();prep()}
+function auto(){return state.players.flatMap(p=>state.games.filter(g=>g.proposed_by===p.id&&!state.vetos.some(v=>v.game_id===g.id)).map(g=>({g,s:state.votes.filter(v=>v.game_id===g.id).reduce((a,v)=>a+6-v.priority,0)})).sort((a,b)=>b.s-a.s||a.g.created_at.localeCompare(b.g.created_at)).slice(0,3).map(x=>x.g))}
+function adminPage(){const sel=state.finals.map(f=>f.game_id),a=auto();$('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">ADMINISTRATION</div><h1>Tableau de contrôle</h1></div><span class="badge">${state.players.length}/5 joueurs</span></div><div class="card"><h2>État</h2><p>Préparation : <b>${state.settings.preparation_locked?'verrouillée':'ouverte'}</b></p><p>Jeux proposés : <b>${state.games.length}/25</b></p><p>Jeux retenus : <b>${state.finals.length}/15</b></p><div class="actions">${!state.settings.preparation_locked?'<button class="button" id="auto">Calculer automatiquement les 15 jeux</button>':''}<button class="button secondary" id="lock">${state.settings.preparation_locked?'Réouvrir la préparation':'Verrouiller la préparation'}</button></div></div><div class="card"><h2>Sélection manuelle des 15 jeux</h2><p>Exactement 3 jeux par joueur.</p><div class="admin-grid">${state.players.flatMap(p=>state.games.filter(g=>g.proposed_by===p.id).map(g=>`<label class="checkgame"><input type="checkbox" class="fc" value="${g.id}" ${sel.includes(g.id)?'checked':''}>${esc(g.name)}</label>`)).join('')}</div><button class="button" id="manual">Enregistrer les 15 jeux</button></div><div class="card"><h2>Résultats saisis</h2><p>${state.results.length} résultats individuels enregistrés.</p></div>`;$('#auto')?.addEventListener('click',()=>a.length===15?saveFinals(a,true):alert('Impossible de produire 15 jeux : vérifiez les listes, votes et vetos.'));$('#manual')?.addEventListener('click',()=>{const ids=[...document.querySelectorAll('.fc:checked')].map(x=>x.value);if(ids.length!==15)return alert('Il faut sélectionner exactement 15 jeux.');if(state.players.some(p=>ids.filter(id=>state.games.find(g=>g.id===id)?.proposed_by===p.id).length!==3))return alert('Il faut exactement 3 jeux par joueur.');saveFinals(ids.map(id=>state.games.find(g=>g.id===id)),false)});$('#lock').onclick=lock}
+async function saveFinals(gs,automatic){const old=await getDocs(collection(db,'final_games')),b=writeBatch(db);old.docs.forEach(d=>b.delete(d.ref));gs.forEach((g,i)=>b.set(doc(db,'final_games',g.id),{game_id:g.id,position:i+1,selected_automatically:automatic,admin_modified:!automatic,created_at:now()}));b.set(doc(db,'admin_logs',`${Date.now()}_${state.me.id}`),{admin_id:state.me.id,action:automatic?'auto_selection':'manual_selection',created_at:now(),details:{game_ids:gs.map(g=>g.id)}});await b.commit();await loadData();adminPage()}
+async function lock(){const v=!state.settings.preparation_locked;if(v&&!confirm('Verrouiller la préparation ?'))return;await setDoc(doc(db,'tournament_settings','main'),{preparation_locked:v,updated_at:now()},{merge:true});await loadData();adminPage()}
+function tournament(){if(!state.finals.length)return $('#app').innerHTML=`<div class="card"><h1>Tournoi</h1><p>Les 15 jeux n'ont pas encore été sélectionnés.</p></div>`;const by={};state.results.forEach(r=>(by[r.game_id]??=[]).push(r));const st=state.players.map(p=>({p,pts:state.results.filter(r=>r.player_id===p.id).reduce((a,r)=>a+r.points,0)})).sort((a,b)=>b.pts-a.pts);$('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 2</div><h1>Le tournoi</h1></div><span class="badge">${st.map((x,i)=>`${i+1}. ${x.p.avatar} ${esc(x.p.name)} · ${x.pts} pts`).join(' · ')}</span></div><div class="card table-scroll"><table class="tournament"><thead><tr><th>Jeu</th>${state.players.map(p=>`<th>${p.avatar}<br>${esc(p.name)}</th>`).join('')}</tr></thead><tbody>${state.finals.map(f=>{const rs=by[f.game_id]||[];return `<tr><td><a href="#/result/${f.game_id}"><b>${f.position}. ${esc(f.games.name)}</b></a></td>${state.players.map(p=>{const r=rs.find(x=>x.player_id===p.id);return `<td>${r?`<span class="rank r${r.rank}">${r.rank}</span><br><small>${r.points} pt</small>`:'—'}</td>`}).join('')}</tr>`}).join('')}</tbody></table></div>`}
+function result(gid){const f=state.finals.find(x=>x.game_id===gid);if(!f)return tournament();const ex=state.results.filter(r=>r.game_id===gid),mine=ex.find(r=>r.player_id===state.me.id);$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">RÉSULTAT</div><h1>${f.position}. ${esc(f.games.name)}</h1><p>Indiquez votre classement sur ce jeu.</p><div class="notice">1er = 5 pts · 2e = 4 pts · 3e = 3 pts · 4e = 2 pts · 5e = 1 pt</div><form id="rf"><label>Mon classement<select id="rank" required><option value="">Choisir…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${mine?.rank===n?'selected':''}>${n}e place · ${POINTS[n]} point(s)</option>`).join('')}</select></label><button class="button">Enregistrer</button></form><p class="muted">Résultats actuellement saisis : ${ex.length}/5.</p><a href="#/tournoi">← Retour au tournoi</a></div>`;$('#rf').onsubmit=async e=>{e.preventDefault();const r=Number($('#rank').value),used=ex.find(x=>x.rank===r&&x.player_id!==state.me.id);if(used)return alert('Cette place est déjà attribuée pour ce jeu.');await setDoc(doc(db,'results',`${gid}_${state.me.id}`),{game_id:gid,player_id:state.me.id,rank:r,points:POINTS[r],entered_by:state.me.id,is_admin_edit:false,updated_at:now()},{merge:true});await loadData();location.hash='/tournoi';render()}}
+function stats(){const s=state.players.map(p=>{const r=state.results.filter(x=>x.player_id===p.id);return{p,r,pts:r.reduce((a,x)=>a+x.points,0),w:r.filter(x=>x.rank===1).length,pod:r.filter(x=>x.rank<=3).length}});$('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 3</div><h1>Statistiques</h1></div></div><div class="card"><label>Choisir un joueur<select id="sp">${s.map(x=>`<option value="${x.p.id}">${x.p.avatar} ${esc(x.p.name)}</option>`).join('')}</select></label><div id="sd"></div></div>`;const detail=id=>{const x=s.find(y=>y.p.id===id)||s[0];if(!x)return;const avg=x.r.length?(x.pts/x.r.length).toFixed(2):'—';$('#sd').innerHTML=`<div class="player-card"><span class="big">${x.p.avatar}</span><div><h2>${esc(x.p.name)}</h2><span class="muted">${x.r.length} jeu(x) joué(s)</span></div></div><div class="stats-grid"><div><small>Points</small><b>${x.pts}</b></div><div><small>Moyenne / jeu</small><b>${avg}</b></div><div><small>Victoires</small><b>${x.w}</b></div><div><small>Podiums</small><b>${x.pod}</b></div></div><p>🥇 ${x.r.filter(r=>r.rank===1).length} · 🥈 ${x.r.filter(r=>r.rank===2).length} · 🥉 ${x.r.filter(r=>r.rank===3).length} · 4e ${x.r.filter(r=>r.rank===4).length} · 5e ${x.r.filter(r=>r.rank===5).length}</p>`};$('#sp').onchange=e=>detail(e.target.value);detail(s[0]?.p.id)}
+window.addEventListener('hashchange',async()=>{if(state.user)await loadData();renderNav();render()});
+onAuthStateChanged(auth,async u=>{state.user=u||null;if(state.user)try{await loadData()}catch(e){console.error(e);$('#app').innerHTML=flash(`Erreur Firebase : ${e.message}`)}else{state.me=null;state.isAdmin=false}renderNav();render()});
