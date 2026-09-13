@@ -64,37 +64,85 @@ function gameImage(g, cls='tir-game-thumb'){
 function imageSearchScore(title, gameName){
   const t=norm(title), n=norm(gameName);
   let s=0;
-  if(t===n)s+=100;
-  if(t.includes(n))s+=55;
+  if(t===n)s+=200;
+  if(t.startsWith(n))s+=100;
+  if(t.includes(n))s+=60;
   const nt=n.split(' ').filter(x=>x.length>2);
-  nt.forEach(w=>{if(t.includes(w))s+=8});
-  if(/\b(box|boite|board game|jeu de societe|game|edition|fr)\b/i.test(title))s+=15;
-  if(/\b(dancing|dance|person|people|woman|man|score|scoring|points|tournament|expo|event|tableau|championship|costume|cosplay)\b/i.test(title))s-=45;
+  nt.forEach(w=>{if(t.includes(w))s+=10});
+  if(/\b(box|boite|cover|couverture|board game|jeu de societe|game|edition|fr)\b/i.test(title))s+=20;
+  if(/\b(dancing|dance|person|people|woman|man|score|scoring|points|tournament|expo|event|tableau|championship|costume|cosplay|pdf|poster|affiche)\b/i.test(title))s-=80;
   return s;
 }
 
-async function searchGameImages(gameName){
+async function searchWikipediaGames(gameName){
+  const langs=['fr','en'];
+  const found=[];
+  const seen=new Set();
+  for(const lang of langs){
+    try{
+      const api=`https://${lang}.wikipedia.org/w/api.php?action=query&generator=search&gsrnamespace=0&gsrsearch=${encodeURIComponent(gameName+' jeu société')}&gsrlimit=6&prop=pageimages|info&inprop=url&piprop=thumbnail|original&pithumbsize=420&format=json&origin=*`;
+      const r=await fetch(api);
+      if(!r.ok) continue;
+      const j=await r.json();
+      const pages=Object.values(j.query?.pages||{});
+      pages.forEach(p=>{
+        const thumb=p.thumbnail?.source || p.original?.source;
+        if(!thumb || seen.has(p.pageid)) return;
+        const title=p.title||'';
+        const score=imageSearchScore(title,gameName);
+        // On ne garde les pages que si le titre correspond réellement au jeu.
+        const n=norm(gameName), t=norm(title);
+        const words=n.split(' ').filter(x=>x.length>2);
+        const close=t===n || t.includes(n) || (words.length && words.filter(w=>t.includes(w)).length>=Math.max(1,Math.ceil(words.length*.7)));
+        if(!close) return;
+        seen.add(p.pageid);
+        found.push({
+          id:String(p.pageid),
+          title,
+          url:thumb,
+          score,
+          source:'wikipedia',
+          page_url:p.fullurl||`https://${lang}.wikipedia.org/?curid=${p.pageid}`
+        });
+      });
+    }catch(e){}
+  }
+  return found.sort((a,b)=>b.score-a.score).slice(0,6);
+}
+
+async function searchCommonsFallback(gameName){
   const searches=[
-    `intitle:"${gameName}" "board game"`,
-    `intitle:"${gameName}" box`,
-    `"${gameName}" board game`
+    `"${gameName}" "board game"`,
+    `"${gameName}" box`,
+    `"${gameName}" "jeu de société"`
   ];
   const all=new Map();
   for(const q of searches){
     try{
-      const u='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch='+encodeURIComponent(q)+'&gsrlimit=12&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=360&format=json&origin=*';
+      const u='https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch='+encodeURIComponent(q)+'&gsrlimit=20&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=420&format=json&origin=*';
       const r=await fetch(u);
       if(!r.ok) continue;
       const j=await r.json();
       Object.values(j.query?.pages||{}).forEach(p=>{
         const ii=p.imageinfo?.[0], title=(p.title||'').replace(/^File:/i,'');
         const url=ii?.thumburl||ii?.url;
-        if(url) all.set(p.pageid,{id:String(p.pageid),title,url,score:imageSearchScore(title,gameName)});
+        if(!url || all.has(p.pageid)) return;
+        const score=imageSearchScore(title,gameName);
+        if(score < 25) return;
+        all.set(p.pageid,{id:String(p.pageid),title,url,score,source:'wikimedia_commons'});
       });
     }catch(e){}
-    if(all.size>=8) break;
+    if(all.size>=12) break;
   }
-  return [...all.values()].sort((a,b)=>b.score-a.score).slice(0,8);
+  return [...all.values()].sort((a,b)=>b.score-a.score).slice(0,6);
+}
+
+async function searchGameImages(gameName){
+  // Priorité absolue à la fiche Wikipedia du jeu, dont l'image est généralement
+  // l'illustration officielle/boîte du jeu. Commons n'est utilisé qu'en secours.
+  const wiki=await searchWikipediaGames(gameName);
+  if(wiki.length) return wiki;
+  return await searchCommonsFallback(gameName);
 }
 
 function pickGameImage(gameName){
@@ -104,8 +152,8 @@ function pickGameImage(gameName){
     const modal=document.createElement('div');
     modal.className='tir-image-modal';
     modal.innerHTML=`<div class="tir-image-box">
-      <div class="tir-image-head"><div><div class="eyebrow">IMAGE DU JEU</div><h2>Choisir la boîte de « ${esc(gameName)} »</h2><p class="muted">Clique sur l'image qui correspond au jeu. Elle sera conservée avec le jeu.</p></div><button class="button light tir-close">Fermer</button></div>
-      <div class="tir-image-content"><p class="muted">Recherche des boîtes…</p></div>
+      <div class="tir-image-head"><div><div class="eyebrow">IMAGE DU JEU</div><h2>Choisir la boîte de « ${esc(gameName)} »</h2><p class="muted">Les propositions proviennent en priorité de la fiche du jeu. Clique sur la bonne boîte pour la conserver avec le jeu.</p></div><button class="button light tir-close">Fermer</button></div>
+      <div class="tir-image-content"><p class="muted">Recherche de la boîte du jeu…</p></div>
       <div class="tir-image-actions"><button class="button light tir-none">Continuer sans image</button></div>
     </div>`;
     document.body.appendChild(modal);
@@ -116,19 +164,20 @@ function pickGameImage(gameName){
     const results=await searchGameImages(gameName);
     const content=modal.querySelector('.tir-image-content');
     if(!results.length){
-      content.innerHTML=`<div class="notice">Aucune image de boîte trouvée. Tu peux continuer sans image.</div>`;
+      content.innerHTML=`<div class="notice">Je n'ai pas trouvé de boîte suffisamment fiable. Tu peux continuer sans image.</div>`;
       return;
     }
-    content.innerHTML=`<div class="tir-image-grid">${results.map((r,i)=>`<button type="button" class="tir-image-choice" data-i="${i}"><img src="${esc(r.url)}" alt=""><div class="tir-image-title">${esc(r.title)}</div></button>`).join('')}</div>`;
+    content.innerHTML=`<div class="tir-image-grid">${results.map((r,i)=>`<button type="button" class="tir-image-choice" data-i="${i}"><img src="${esc(r.url)}" alt="Boîte ${esc(gameName)}" loading="lazy"><div class="tir-image-title">${esc(r.title)}</div></button>`).join('')}</div>`;
     modal.querySelectorAll('.tir-image-choice').forEach(b=>b.onclick=()=>finish(results[Number(b.dataset.i)]));
   });
 }
+
 function home(){$('#app').innerHTML=`<section class="hero"><div><div class="eyebrow">SAISON 1 · 5 JOUEURS · 15 JEUX</div><h1>Le Grand <strong>Tournoi</strong> des Tirlibibi</h1><p>Choisissez vos jeux, votez, utilisez votre veto… puis affrontez-vous sur les 15 jeux retenus.</p><div class="actions">${state.user?'<a class="button" href="#/preparation">Entrer dans le tournoi</a>':'<a class="button" href="#/register">Créer mon joueur</a><a class="button light" href="#/login">Me connecter</a>'}</div></div><div class="dice">🎲</div></section><div class="card"><h2>Les joueurs</h2><div class="players">${state.players.map(p=>`<div class="player"><span class="avatar">${p.avatar}</span><b>${esc(p.name)}</b></div>`).join('')||'<span class="muted">Les joueurs apparaîtront ici.</span>'}</div></div>${state.finals.length?`<div class="card"><h2>Les 15 jeux du tournoi</h2><div class="game-grid">${state.finals.map(f=>`<article class="game"><div class="cover">${f.games.image_url?`<img src="${esc(f.games.image_url)}" alt="">`:'🎲'}</div><b>${f.position}. ${esc(f.games.name)}</b><small class="muted">${esc(state.players.find(p=>p.id===f.games.proposed_by)?.name||'')}</small></article>`).join('')}</div></div>`:''}`}
 function login(){$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">CONNEXION</div><h1>Bienvenue</h1><form id="f"><label>Email<input id="email" type="email" required></label><label>Mot de passe<input id="password" type="password" required></label><button class="button">Se connecter</button></form><p class="muted">Pas encore inscrit ? <a href="#/register">Créer mon compte</a></p></div>`;$('#f').onsubmit=async e=>{e.preventDefault();try{await signInWithEmailAndPassword(auth,$('#email').value.trim(),$('#password').value);location.hash='/'}catch(x){$('#app').insertAdjacentHTML('afterbegin',flash(x.message))}}}
 function register(){$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">INSCRIPTION</div><h1>Je rejoins le tournoi</h1><form id="f"><label>Prénom / pseudo<input id="name" maxlength="40" required></label><label>Email<input id="email" type="email" required></label><label>Mot de passe<input id="password" type="password" minlength="6" required></label><label>Mon avatar</label><div class="avatars">${AVATARS.map((a,i)=>`<label class="avatar-choice"><input type="radio" name="avatar" value="${a}" ${i?'':'checked'}><span>${a}</span></label>`).join('')}</div><button class="button">Créer mon compte</button></form><p class="muted">Le tournoi est limité à 5 joueurs.</p></div>`;$('#f').onsubmit=async e=>{e.preventDefault();try{if((await getDocs(collection(db,'players'))).docs.filter(d=>!d.data().is_admin).length>=5)throw Error('Les 5 places du tournoi sont déjà prises.');const name=$('#name').value.trim(),email=$('#email').value.trim().toLowerCase(),password=$('#password').value,avatar=document.querySelector('[name=avatar]:checked').value,c=await createUserWithEmailAndPassword(auth,email,password);const existing=await getDocs(collection(db,'players'));if(existing.docs.filter(d=>!d.data().is_admin&&d.data().email).length>=5){await signOut(auth);throw Error('Les 5 places du tournoi sont déjà prises.')}await updateProfile(c.user,{displayName:name});await setDoc(doc(db,'players',c.user.uid),{id:c.user.uid,email,name,avatar,is_admin:false,created_at:now()});location.hash='/'}catch(x){$('#app').insertAdjacentHTML('afterbegin',flash(x.message))}}}
 function profile(){$('#app').innerHTML=`<div class="card narrow"><h2>Profil à finaliser</h2><p>Votre compte existe mais votre profil joueur n'a pas pu être chargé.</p></div>`}
 function prep(){const mine=state.games.filter(g=>g.proposed_by===state.me.id),others=state.players.filter(p=>p.id!==state.me.id).map(p=>({...p,games:state.games.filter(g=>g.proposed_by===p.id)})),locked=state.settings.preparation_locked,vmap=Object.fromEntries(state.votes.map(v=>[v.game_id,v.priority])),counts={};state.vetos.forEach(v=>{const g=state.games.find(x=>x.id===v.game_id);if(g)counts[g.proposed_by]=(counts[g.proposed_by]||0)+1});$('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 1</div><h1>Préparation</h1></div><span class="badge">${mine.length}/5 jeux proposés</span></div>${locked?flash('La préparation est verrouillée.','success'):''}<div class="card"><h2>1. Mes 5 jeux</h2><p class="muted">Chaque jeu doit être différent de tous les autres.</p>${!locked&&mine.length<5?`<form id="gf" class="inline-form"><input id="gn" placeholder="Nom du jeu de société" required><button class="button">Ajouter le jeu</button></form>`:''}<ol>${mine.map(g=>`<li><div class="tir-game-line">${gameImage(g)}<b>${esc(g.name)}</b></div></li>`).join('')}</ol></div><div class="card"><h2>2. Je classe les jeux des autres joueurs</h2><p>Pour chaque liste, utilisez obligatoirement 1, 2, 3, 4 et 5.</p>${others.map(p=>`<section><h3>${p.avatar} ${esc(p.name)}</h3>${p.games.length<5?`<p class="ko">Cette liste n'est pas encore complète.</p>`:p.games.map(g=>`<div class="vote-row"><span class="tir-game-line">${gameImage(g)}<span>${esc(g.name)}</span></span><select data-game="${g.id}"><option value="">Priorité…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${vmap[g.id]===n?'selected':''}>${n}</option>`).join('')}</select></div>`).join('')}${p.games.length===5&&!locked?`<button class="button light sv" data-player="${p.id}">Enregistrer ce classement</button>`:''}</section>`).join('')}</div><div class="card"><h2>3. Mon veto</h2><p>Un seul veto pour tout le tournoi. Une liste ne peut recevoir que 2 vetos.</p>${state.veto?`<div class="notice">Veto utilisé sur : <span class="tir-game-line" style="display:inline-flex">${gameImage(state.games.find(g=>g.id===state.veto.game_id),'tir-game-thumb')}<b>${esc(state.games.find(g=>g.id===state.veto.game_id)?.name||'')}</b></span></div>`:locked?'<p class="muted">Veto indisponible : préparation verrouillée.</p>':`<div class="veto-list">${state.games.filter(g=>g.proposed_by!==state.me.id&&(counts[g.proposed_by]||0)<2).map(g=>`<button class="veto" data-veto="${g.id}">${g.image_url?`<img class="tir-game-cover" src="${esc(g.image_url)}" alt="">`:'🎲'} 🚫 ${esc(g.name)}</button>`).join('')}</div>`}</div>`;$('#gf')?.addEventListener('submit',addGame);document.querySelectorAll('.sv').forEach(b=>b.onclick=()=>votes(b.dataset.player));document.querySelectorAll('[data-veto]').forEach(b=>b.onclick=()=>veto(b.dataset.veto))}
-async function addGame(e){e.preventDefault();if(state.settings.preparation_locked)return;const name=$('#gn').value.trim(),normalized=norm(name),mine=state.games.filter(g=>g.proposed_by===state.me.id);if(mine.length>=5)return alert('Vous avez déjà proposé 5 jeux.');const old=state.games.find(g=>g.normalized_name===normalized);if(old)return $('#app').insertAdjacentHTML('afterbegin',flash(`Jeu déjà proposé par ${state.players.find(p=>p.id===old.proposed_by)?.name||'un autre joueur'}.`));const image=await pickGameImage(name);await addDoc(collection(db,'games'),{name,normalized_name:normalized,proposed_by:state.me.id,created_at:now(),image_url:image?.url||null,image_thumb_url:image?.url||null,image_source:image?'wikimedia_commons':null,image_id:image?.id||null,image_title:image?.title||null});await loadData();prep()}
+async function addGame(e){e.preventDefault();if(state.settings.preparation_locked)return;const name=$('#gn').value.trim(),normalized=norm(name),mine=state.games.filter(g=>g.proposed_by===state.me.id);if(mine.length>=5)return alert('Vous avez déjà proposé 5 jeux.');const old=state.games.find(g=>g.normalized_name===normalized);if(old)return $('#app').insertAdjacentHTML('afterbegin',flash(`Jeu déjà proposé par ${state.players.find(p=>p.id===old.proposed_by)?.name||'un autre joueur'}.`));const image=await pickGameImage(name);await addDoc(collection(db,'games'),{name,normalized_name:normalized,proposed_by:state.me.id,created_at:now(),image_url:image?.url||null,image_thumb_url:image?.url||null,image_source:image?.source||null,image_id:image?.id||null,image_title:image?.title||null,image_page_url:image?.page_url||null});await loadData();prep()}
 async function votes(pid){const gs=state.games.filter(g=>g.proposed_by===pid),vals=gs.map(g=>Number(document.querySelector(`[data-game="${g.id}"]`).value));if(vals.length!==5||vals.some(v=>!v)||new Set(vals).size!==5)return alert('Il faut utiliser exactement 1, 2, 3, 4 et 5.');const b=writeBatch(db);gs.forEach((g,i)=>b.set(doc(db,'game_votes',`${state.me.id}_${g.id}`),{voter_id:state.me.id,game_id:g.id,priority:vals[i],created_at:now()}));await b.commit();await loadData();prep()}
 async function veto(gid){if(state.veto)return alert('Vous avez déjà utilisé votre veto.');if(!confirm('Confirmer ce veto ? Il sera définitif.'))return;const g=state.games.find(x=>x.id===gid);if(!g||g.proposed_by===state.me.id)return;const n=state.vetos.filter(v=>state.games.find(x=>x.id===v.game_id)?.proposed_by===g.proposed_by).length;if(n>=2)return alert('Cette liste a déjà reçu 2 vetos.');await setDoc(doc(db,'vetos',state.me.id),{player_id:state.me.id,game_id:gid,created_at:now()});await loadData();prep()}
 function auto(){return state.players.flatMap(p=>state.games.filter(g=>g.proposed_by===p.id&&!state.vetos.some(v=>v.game_id===g.id)).map(g=>({g,s:state.votes.filter(v=>v.game_id===g.id).reduce((a,v)=>a+6-v.priority,0)})).sort((a,b)=>b.s-a.s||a.g.created_at.localeCompare(b.g.created_at)).slice(0,3).map(x=>x.g))}
