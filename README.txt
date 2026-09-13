@@ -1,2 +1,2 @@
-V9 — mise en page corrigée de la liste Mes 5 jeux.
-Remplacer uniquement app.js dans GitHub puis faire Ctrl+F5.
+V10 — optimisation du tableau du tournoi sur smartphone.
+Remplacer uniquement app.js dans GitHub. L'affichage ordinateur reste inchangé.
