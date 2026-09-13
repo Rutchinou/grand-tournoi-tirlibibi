@@ -32,8 +32,29 @@ async function loadData(){
   const ss=await getDoc(doc(db,'tournament_settings','main')); if(ss.exists())state.settings=ss.data();
 }
 async function load(){if(!cfg.apiKey||cfg.apiKey.includes('COLLER_ICI')){$('#app').innerHTML=`<div class="card narrow"><h2>⚙️ Configuration à terminer</h2><p>Dans <b>config.js</b>, collez la clé API de l'application Web Firebase.</p></div>`;return} if(state.user)await loadData();renderNav();render()}
-function renderNav(){const n=$('#nav');if(!state.user){n.innerHTML=`<a href="#/login">Connexion</a><a href="#/register" class="button">Participer</a>`;return}n.innerHTML=`<a href="#/">Accueil</a><a href="#/preparation">Préparation</a><a href="#/tournoi">Tournoi</a><a href="#/stats">Stats</a><a href="#/calendrier">Calendrier</a>${state.isAdmin?'<a href="#/admin">⚙️ Admin</a>':''}<a href="#" id="logout">Déconnexion</a>`;$('#logout')?.addEventListener('click',async e=>{e.preventDefault();await signOut(auth);location.hash='/'})}
-async function render(){const r=route();if(r==='/login')return login();if(r==='/register')return register();if(!state.user)return home();if(!state.me)return profile();if(r==='/preparation')return prep();if(r==='/tournoi')return tournament();if(r.startsWith('/result/'))return result(r.split('/')[2]);if(r==='/stats')return stats();if(r==='/calendrier')return calendar();if(r==='/admin'&&state.isAdmin)return adminPage();home()}
+function renderNav(){
+  const n=$('#nav');
+  if(!state.user){
+    n.innerHTML=`<a href="#/login">Connexion</a><a href="#/register" class="button">Participer</a>`;
+    return;
+  }
+  n.innerHTML=`<a href="#/">Accueil</a><a href="#/preparation">Préparation</a><a href="#/tournoi">Tournoi</a><a href="#/stats">Stats</a><a href="#/calendrier">📅 Calendrier</a>${state.isAdmin?'<a href="#/admin">⚙️ Admin</a>':''}<a href="#" id="logout">Déconnexion</a>`;
+  $('#logout')?.addEventListener('click',async e=>{e.preventDefault();await signOut(auth);location.hash='/'});
+}
+async function render(){
+  const r=route();
+  if(r==='/login')return login();
+  if(r==='/register')return register();
+  if(!state.user)return home();
+  if(!state.me)return profile();
+  if(r==='/preparation')return prep();
+  if(r==='/tournoi')return tournament();
+  if(r.startsWith('/result/'))return result(r.split('/')[2]);
+  if(r==='/stats')return stats();
+  if(r==='/calendrier')return calendar();
+  if(r==='/admin'&&state.isAdmin)return adminPage();
+  home();
+}
 function home(){$('#app').innerHTML=`<section class="hero"><div><div class="eyebrow">SAISON 1 · 5 JOUEURS · 15 JEUX</div><h1>Le Grand <strong>Tournoi</strong> des Tirlibibi</h1><p>Choisissez vos jeux, votez, utilisez votre veto… puis affrontez-vous sur les 15 jeux retenus.</p><div class="actions">${state.user?'<a class="button" href="#/preparation">Entrer dans le tournoi</a>':'<a class="button" href="#/register">Créer mon joueur</a><a class="button light" href="#/login">Me connecter</a>'}</div></div><div class="dice">🎲</div></section><div class="card"><h2>Les joueurs</h2><div class="players">${state.players.map(p=>`<div class="player"><span class="avatar">${p.avatar}</span><b>${esc(p.name)}</b></div>`).join('')||'<span class="muted">Les joueurs apparaîtront ici.</span>'}</div></div>${state.finals.length?`<div class="card"><h2>Les 15 jeux du tournoi</h2><div class="game-grid">${state.finals.map(f=>`<article class="game"><div class="cover">${f.games.image_url?`<img src="${esc(f.games.image_url)}" alt="">`:'🎲'}</div><b>${f.position}. ${esc(f.games.name)}</b><small class="muted">${esc(state.players.find(p=>p.id===f.games.proposed_by)?.name||'')}</small></article>`).join('')}</div></div>`:''}`}
 function login(){$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">CONNEXION</div><h1>Bienvenue</h1><form id="f"><label>Email<input id="email" type="email" required></label><label>Mot de passe<input id="password" type="password" required></label><button class="button">Se connecter</button></form><p class="muted">Pas encore inscrit ? <a href="#/register">Créer mon compte</a></p></div>`;$('#f').onsubmit=async e=>{e.preventDefault();try{await signInWithEmailAndPassword(auth,$('#email').value.trim(),$('#password').value);location.hash='/'}catch(x){$('#app').insertAdjacentHTML('afterbegin',flash(x.message))}}}
 function register(){$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">INSCRIPTION</div><h1>Je rejoins le tournoi</h1><form id="f"><label>Prénom / pseudo<input id="name" maxlength="40" required></label><label>Email<input id="email" type="email" required></label><label>Mot de passe<input id="password" type="password" minlength="6" required></label><label>Mon avatar</label><div class="avatars">${AVATARS.map((a,i)=>`<label class="avatar-choice"><input type="radio" name="avatar" value="${a}" ${i?'':'checked'}><span>${a}</span></label>`).join('')}</div><button class="button">Créer mon compte</button></form><p class="muted">Le tournoi est limité à 5 joueurs.</p></div>`;$('#f').onsubmit=async e=>{e.preventDefault();try{if((await getDocs(collection(db,'players'))).docs.filter(d=>!d.data().is_admin).length>=5)throw Error('Les 5 places du tournoi sont déjà prises.');const name=$('#name').value.trim(),email=$('#email').value.trim().toLowerCase(),password=$('#password').value,avatar=document.querySelector('[name=avatar]:checked').value,c=await createUserWithEmailAndPassword(auth,email,password);const existing=await getDocs(collection(db,'players'));if(existing.docs.filter(d=>!d.data().is_admin&&d.data().email).length>=5){await signOut(auth);throw Error('Les 5 places du tournoi sont déjà prises.')}await updateProfile(c.user,{displayName:name});await setDoc(doc(db,'players',c.user.uid),{id:c.user.uid,email,name,avatar,is_admin:false,created_at:now()});location.hash='/'}catch(x){$('#app').insertAdjacentHTML('afterbegin',flash(x.message))}}}
@@ -50,31 +71,76 @@ function tournament(){if(!state.finals.length)return $('#app').innerHTML=`<div c
 function result(gid){const f=state.finals.find(x=>x.game_id===gid);if(!f)return tournament();const ex=state.results.filter(r=>r.game_id===gid),mine=ex.find(r=>r.player_id===state.me.id);$('#app').innerHTML=`<div class="card narrow"><div class="eyebrow">RÉSULTAT</div><h1>${f.position}. ${esc(f.games.name)}</h1><p>Indiquez votre classement sur ce jeu.</p><div class="notice">1er = 5 pts · 2e = 4 pts · 3e = 3 pts · 4e = 2 pts · 5e = 1 pt</div><form id="rf"><label>Mon classement<select id="rank" required><option value="">Choisir…</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${mine?.rank===n?'selected':''}>${n}e place · ${POINTS[n]} point(s)</option>`).join('')}</select></label><button class="button">Enregistrer</button></form><p class="muted">Résultats actuellement saisis : ${ex.length}/5.</p><a href="#/tournoi">← Retour au tournoi</a></div>`;$('#rf').onsubmit=async e=>{e.preventDefault();const r=Number($('#rank').value),used=ex.find(x=>x.rank===r&&x.player_id!==state.me.id);if(used)return alert('Cette place est déjà attribuée pour ce jeu.');await setDoc(doc(db,'results',`${gid}_${state.me.id}`),{game_id:gid,player_id:state.me.id,rank:r,points:POINTS[r],entered_by:state.me.id,is_admin_edit:false,updated_at:now()},{merge:true});await loadData();location.hash='/tournoi';render()}}
 
 function calendar(){
-  const today=new Date(), start=new Date(today.getFullYear(),today.getMonth(),1);
+  const today=new Date();
+  const start=new Date(today.getFullYear(),today.getMonth(),1);
   const months=[0,1,2].map(i=>new Date(start.getFullYear(),start.getMonth()+i,1));
+  const key=(y,m,d)=>`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  const dateKey=d=>key(d.getFullYear(),d.getMonth(),d.getDate());
   const byDate={};
-  state.availability.forEach(a=>{(byDate[a.date]??=[]).push(a.player_id)});
-  const fmt=d=>d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'long'});
-  const days=[];
-  months.forEach(m=>{const last=new Date(m.getFullYear(),m.getMonth()+1,0).getDate();for(let n=1;n<=last;n++)days.push(new Date(m.getFullYear(),m.getMonth(),n));});
-  const rows=days.map(d=>{
-    const iso=d.toISOString().slice(0,10), ids=byDate[iso]||[], mine=ids.includes(state.me.id);
-    const full=ids.length===5;
-    const people=state.players.map(p=>ids.includes(p.id)?`<span title="${esc(p.name)}">${p.avatar}</span>`:'').join(' ');
-    return `<tr class="${full?'calendar-full':''}"><td><b>${fmt(d)}</b></td><td><button class="button ${mine?'secondary':''} cal-btn" data-date="${iso}">${mine?'✓ Disponible':'Je suis disponible'}</button></td><td><b>${ids.length}/5</b><br><small>${people||'—'}</small></td></tr>`;
-  }).join('');
-  const fullDates=days.filter(d=>(byDate[d.toISOString().slice(0,10)]||[]).length===5);
-  $('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">RENCONTRE DU TOURNOI</div><h1>📅 Calendrier</h1></div><span class="badge">${state.availability.filter(a=>a.player_id===state.me.id).length} date(s) cochée(s)</span></div>
-  <div class="card"><h2>Trouvons une date pour jouer ensemble</h2><p class="muted">Clique sur les dates où tu es disponible. Tout le monde voit les disponibilités.</p>
-  ${fullDates.length?`<div class="notice success">🎯 <b>${fullDates.length} date(s) où les 5 joueurs sont disponibles :</b> ${fullDates.map(fmt).join(' · ')}</div>`:'<div class="notice">🎯 Les dates à <b>5/5</b> apparaîtront ici automatiquement.</div>'}</div>
-  <div class="card table-scroll"><table class="tournament calendar-table"><thead><tr><th>Date</th><th>Ma disponibilité</th><th>Joueurs disponibles</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  document.querySelectorAll('.cal-btn').forEach(b=>b.onclick=async()=>{
-    const date=b.dataset.date,id=`${state.me.id}_${date}`,exists=state.availability.find(a=>a.player_id===state.me.id&&a.date===date);
-    if(exists) await deleteDoc(doc(db,'availability',id));
-    else await setDoc(doc(db,'availability',id),{player_id:state.me.id,date,created_at:now()});
-    await loadData(); calendar();
+  state.availability.forEach(a=>{
+    if(!byDate[a.date])byDate[a.date]=[];
+    byDate[a.date].push(a.player_id);
+  });
+  const monthNames=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+  const dayNames=['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+  const fmt=d=>`${dayNames[d.getDay()]} ${d.getDate()} ${monthNames[d.getMonth()]}`;
+  const fullDates=[];
+  let rows='';
+  months.forEach(m=>{
+    const last=new Date(m.getFullYear(),m.getMonth()+1,0).getDate();
+    for(let n=1;n<=last;n++){
+      const d=new Date(m.getFullYear(),m.getMonth(),n);
+      const iso=dateKey(d);
+      const ids=byDate[iso]||[];
+      const mine=ids.includes(state.me.id);
+      const full=ids.length===5;
+      if(full)fullDates.push(d);
+      const people=state.players.map(p=>ids.includes(p.id)
+        ? `<span class="avatar" title="${esc(p.name)}">${p.avatar}</span>`
+        : '').join(' ');
+      rows+=`<tr class="${full?'calendar-full':''}">
+        <td><b>${fmt(d)}</b></td>
+        <td><button type="button" class="button ${mine?'secondary':''} cal-btn" data-date="${iso}">${mine?'✓ Disponible':'Je suis disponible'}</button></td>
+        <td><b>${ids.length}/5</b><br><small>${people||'—'}</small></td>
+      </tr>`;
+    }
+  });
+  const allDates=fullDates.length
+    ? `<div class="notice success">🎯 <b>${fullDates.length} date(s) où les 5 joueurs sont disponibles :</b><br>${fullDates.map(fmt).join(' · ')}</div>`
+    : `<div class="notice">🎯 Les dates à <b>5/5</b> apparaîtront ici automatiquement.</div>`;
+  $('#app').innerHTML=`
+    <div class="page-head">
+      <div><div class="eyebrow">RENCONTRE DU TOURNOI</div><h1>📅 Calendrier</h1></div>
+      <span class="badge">${state.availability.filter(a=>a.player_id===state.me.id).length} date(s) cochée(s)</span>
+    </div>
+    <div class="card">
+      <h2>Trouvons une date pour jouer ensemble</h2>
+      <p class="muted">Clique sur les dates où tu es disponible. Tout le monde voit les disponibilités des autres joueurs.</p>
+      ${allDates}
+    </div>
+    <div class="card table-scroll">
+      <table class="tournament calendar-table">
+        <thead><tr><th>Date</th><th>Ma disponibilité</th><th>Joueurs disponibles</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  document.querySelectorAll('.cal-btn').forEach(b=>{
+    b.onclick=async()=>{
+      const date=b.dataset.date;
+      const id=`${state.me.id}_${date}`;
+      const exists=state.availability.find(a=>a.player_id===state.me.id&&a.date===date);
+      try{
+        if(exists)await deleteDoc(doc(db,'availability',id));
+        else await setDoc(doc(db,'availability',id),{player_id:state.me.id,date,created_at:now()});
+        await loadData();
+        calendar();
+      }catch(e){
+        $('#app').insertAdjacentHTML('afterbegin',flash(`Impossible d'enregistrer la disponibilité : ${e.message}`));
+      }
+    };
   });
 }
+
 function stats(){const s=state.players.map(p=>{const r=state.results.filter(x=>x.player_id===p.id);return{p,r,pts:r.reduce((a,x)=>a+x.points,0),w:r.filter(x=>x.rank===1).length,pod:r.filter(x=>x.rank<=3).length}});$('#app').innerHTML=`<div class="page-head"><div><div class="eyebrow">MODULE 3</div><h1>Statistiques</h1></div></div><div class="card"><label>Choisir un joueur<select id="sp">${s.map(x=>`<option value="${x.p.id}">${x.p.avatar} ${esc(x.p.name)}</option>`).join('')}</select></label><div id="sd"></div></div>`;const detail=id=>{const x=s.find(y=>y.p.id===id)||s[0];if(!x)return;const avg=x.r.length?(x.pts/x.r.length).toFixed(2):'—';$('#sd').innerHTML=`<div class="player-card"><span class="big">${x.p.avatar}</span><div><h2>${esc(x.p.name)}</h2><span class="muted">${x.r.length} jeu(x) joué(s)</span></div></div><div class="stats-grid"><div><small>Points</small><b>${x.pts}</b></div><div><small>Moyenne / jeu</small><b>${avg}</b></div><div><small>Victoires</small><b>${x.w}</b></div><div><small>Podiums</small><b>${x.pod}</b></div></div><p>🥇 ${x.r.filter(r=>r.rank===1).length} · 🥈 ${x.r.filter(r=>r.rank===2).length} · 🥉 ${x.r.filter(r=>r.rank===3).length} · 4e ${x.r.filter(r=>r.rank===4).length} · 5e ${x.r.filter(r=>r.rank===5).length}</p>`};$('#sp').onchange=e=>detail(e.target.value);detail(s[0]?.p.id)}
 window.addEventListener('hashchange',async()=>{if(state.user)await loadData();renderNav();render()});
 onAuthStateChanged(auth,async u=>{state.user=u||null;if(state.user)try{await loadData()}catch(e){console.error(e);$('#app').innerHTML=flash(`Erreur Firebase : ${e.message}`)}else{state.me=null;state.isAdmin=false}renderNav();render()});
