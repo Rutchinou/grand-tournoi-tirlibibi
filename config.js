@@ -1,6 +1,6 @@
 // Configuration publique Firebase
 window.TIRLIBIBI_CONFIG = {
-  apiKey: "COLLER_ICI_API_KEY",
+  apiKey: "AIzaSyDazG_UwbFfdFBYXP29dj66nPPjYbJIYqg",
   authDomain: "grand-tournoi-tirlibibi.firebaseapp.com",
   projectId: "grand-tournoi-tirlibibi",
   storageBucket: "grand-tournoi-tirlibibi.firebasestorage.app",
